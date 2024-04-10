@@ -28,9 +28,9 @@ async def main():
     pinecone_index = ""
     
     # However, by passing the domain or company specific vectorstore, the code will use it for researching the topic in addition to researching for topic on internet. 
-    # pinecone_api_key = st.secrets['PINECONE_API_KEY']
-    # pinecone_envo = st.secrets['PINECONE_ENV']
-    # pinecone_index = st.secrets['PINECONE_INDEX']
+    pinecone_api_key = st.secrets['PINECONE_API_KEY']
+    pinecone_envo = st.secrets['PINECONE_ENV']
+    pinecone_index = st.secrets['PINECONE_INDEX']
     
     # Create an instance of the Storm class
     storm_instance = Storm(topic, open_ai_key, pinecone_api_key, pinecone_envo, pinecone_index)
