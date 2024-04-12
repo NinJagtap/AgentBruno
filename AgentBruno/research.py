@@ -12,10 +12,10 @@ from langchain_core.runnables import RunnableLambda, chain as as_runnable, Runna
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage, AnyMessage
 from langgraph.graph import StateGraph, END
 from langchain_core.prompts import MessagesPlaceholder
-from langchain.vectorstores import Pinecone
+#from langchain.vectorstores import Pinecone
 from langchain_community.utilities.duckduckgo_search import DuckDuckGoSearchAPIWrapper
 from langchain_core.tools import tool
-from langchain_community.vectorstores import SKLearnVectorStore
+from langchain_community.vectorstores import SKLearnVectorStore, Pinecone
 from langchain_core.documents import Document
 from langchain_core.output_parsers import StrOutputParser
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
@@ -88,7 +88,7 @@ class WikiSection(BaseModel):
         default=None,
         title="Titles and descriptions for each subsection of the Wikipedia page.",
     )
-    citations: List[str] = Field(default_factory=list)
+    citations: Optional[List[str]]  = Field(default_factory=list)
 
     @property
     def as_str(self) -> str:
@@ -435,7 +435,7 @@ async def conduct_interviews(state: ResearchState):
         answer: str = Field(
             description="Comprehensive answer to the user's question with citations.",
         )
-        cited_urls: List[str] = Field(
+        cited_urls: Optional[List[str]]  = Field(
             description="List of urls cited in the answer.",
         )
     
@@ -504,20 +504,32 @@ async def conduct_interviews(state: ResearchState):
         swapped_state = swap_roles(state, name)  # Convert all other AI messages
         queries = await gen_queries_chain.ainvoke(swapped_state)
         
+        
+        successful_results = []
+        
+        try:
             
-        query_results = await search_engine.abatch(
-            queries["parsed"].queries, config, return_exceptions=True
-        )
+            ## Logic to fetch data from Agent Bruno vectorstore
+            if pinecone_index != '':
+                #print("********** Pinecone index is provided.********")
+                vector_results = await search_knowledge_catalogue.abatch(queries["parsed"].queries)
+                #print("Vector store results: ", vector_results)
+                successful_results += vector_results
+                
+            query_results = await search_engine.abatch(
+                queries["parsed"].queries, config, return_exceptions=True
+            )
+        except Exception as e:
+            # Handle the exception here
+            print(f"An error occurred while fetching data from Agent Bruno vectorstore: {e}")
+            
+        
+        #successful_results.extend(res for res in query_results if not isinstance(res, Exception))
 
-        successful_results = [
+        successful_results += [
             res for res in query_results if not isinstance(res, Exception)
         ]
         
-        ## Logic to fetch data from Agent Bruno vectorstore
-        if pinecone_index != '':
-            #print("********** Pinecone index is provided.********")
-            vector_results = await search_knowledge_catalogue.abatch(queries["parsed"].queries)
-            successful_results.extend(vector_results)
         
         all_query_results = {
             res["url"]: res["content"] for results in successful_results for res in results
@@ -697,7 +709,7 @@ async def index_references(state: ResearchState):
     if len(all_docs) > 0:
         # If reference documents exist, add them to the vector store
         
-        print("*****index_references****** : ", len(all_docs))
+        #print("*****index_references****** : ", len(all_docs))
         
         await vectorstore.aadd_documents(all_docs)
 
@@ -759,9 +771,9 @@ async def write_sections(state: ResearchState):
                 for doc in docs
             ]
         )
-        print("****write_section*****")
-        print(formatted)
-        print("*********")
+        # print("****write_section*****")
+        # print(formatted)
+        # print("*********")
         return {"docs": formatted, **inputs}
 
     # Define the section writer pipeline
