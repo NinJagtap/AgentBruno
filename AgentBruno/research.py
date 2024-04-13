@@ -569,14 +569,32 @@ async def conduct_interviews(state: ResearchState):
                 # Only update the shared state with the final answer to avoid
                 # polluting the dialogue history with intermediate messages
                 generated = await gen_answer_chain.ainvoke(swapped_state)
-        
-                cited_urls = set(generated["parsed"].cited_urls)
-                print("---I'm consolidating Citation List---")
-                #print(cited_urls)
-                #print("------")
+                
+                print("---Generated answer and will now extract urls---")
+                print(generated)
+                print("*********")
+                
+                
+                #cited_urls = set(generated["parsed"].cited_urls)
+                try:
+                    cited_urls = set(generated["parsed"].cited_urls)
+                except Exception as e:
+                    print(f"Generated answer has some issues for cited_urls: {e}")
+                    
+                    
+                cited_references={}
+                
+                for k, v in all_query_results.items():
+                    try:
+                        if k in cited_urls:
+                            cited_references[k] = v
+                    except Exception as e:
+                        print(f"Error processing item: {e}")
+                        continue
                 
                 # Save the retrieved information to a the shared state for future reference
-                cited_references = {k: v for k, v in all_query_results.items() if k in cited_urls}
+                #cited_references = {k: v for k, v in all_query_results.items() if k in cited_urls}
+                
                 print("---I'm consolidating cited references---")
                 print(cited_references)
                 print("------")
@@ -587,7 +605,8 @@ async def conduct_interviews(state: ResearchState):
                 # print("------")
                         
                 return {"messages": [formatted_message], "references": cited_references}
-            
+                
+                
             except Exception as e:
                 # If there is any issues with accessing Pinecone catch that exveption and continue
                 print(f" - Generating answers with citation: {e}")
