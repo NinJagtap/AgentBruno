@@ -12,13 +12,13 @@ from langchain_core.runnables import RunnableLambda, chain as as_runnable, Runna
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage, AnyMessage
 from langgraph.graph import StateGraph, END
 from langchain_core.prompts import MessagesPlaceholder
-#from langchain.vectorstores import Pinecone
 from langchain_community.utilities.duckduckgo_search import DuckDuckGoSearchAPIWrapper
 from langchain_core.tools import tool
 from langchain_community.vectorstores import SKLearnVectorStore, Pinecone
 from langchain_core.documents import Document
 from langchain_core.output_parsers import StrOutputParser
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
+
 
 # Pydantic models for handling subsections, sections, and outlines
 
@@ -88,7 +88,7 @@ class WikiSection(BaseModel):
         default=None,
         title="Titles and descriptions for each subsection of the Wikipedia page.",
     )
-    citations: Optional[List[str]]  = Field(default_factory=list)
+    citations: List[str]  = Field(default_factory=list)
 
     @property
     def as_str(self) -> str:
@@ -232,104 +232,110 @@ async def initialize_research(state: ResearchState):
         dict: The updated research state including the generated outline and selected editors.
     """
     
-    topic = state["topic"]
-    #print("I'm in initialize_research topic: ", topic)
+    print("**** Initialize Research ****")
     
-    open_ai_api_key = state["open_ai_key"]
-    fast_llm = ChatOpenAI(model="gpt-3.5-turbo", openai_api_key = open_ai_api_key, temperature=0)
-       
-    # Define chat prompts and chains for generating an outline, expanding related topics, and selecting editors
-    
-    # Chat prompts for generating an outline
-    direct_gen_outline_prompt = ChatPromptTemplate.from_messages(
-        [
-            (
-                "system",
-                "You are a Wikipedia writer. Write an outline for a Wikipedia page about a user-provided topic. The Wikipedia page will be read by consultants and senior executives working for energy and utility sectors for insights. Be comprehensive and specific.",
-            ),
-            ("user", f"{topic}"),
-        ]
-    )
-    
-    generate_outline_direct = direct_gen_outline_prompt | fast_llm.with_structured_output(
-        Outline
-    )
-
-    # Chat prompts for expanding related topics
-    gen_related_topics_prompt = ChatPromptTemplate.from_template(
-        """I'm writing a Wikipedia page for a topic mentioned below. Please identify and recommend some Wikipedia pages on closely related subjects. \n
-        I'm looking for examples that provide insights to consultants and executives into interesting aspects specifically associated with this topic, or examples that help me understand the typical content and structure included in Wikipedia pages.
-        Also remember that this Wikipedia page will be read by consultants and senior executives as insights working for energy and utility sector. 
-        Please list as many subjects and urls as you can.
+    try: 
+        topic = state["topic"]
         
-        Topic of interest: {topic}
-        """
-    )
-    
-    expand_chain = gen_related_topics_prompt | fast_llm.with_structured_output(
-        RelatedSubjects
-    )
-    
-    # Chat prompts for selecting editors
-    gen_perspectives_prompt = ChatPromptTemplate.from_messages(
-        [
-            (
-                "system",
-                """You need to select a diverse (and distinct) group of Wikipedia editors who will work together to create a comprehensive article on the topic. Each of them represents a different perspective, role, or affiliation related to this topic.\
-                You can use other Wikipedia pages of related topics for inspiration. For each editor, add a description of what they will focus on.
-                Wiki page outlines of related topics for inspiration:
-                {examples}""",
-            ),
-            ("user", "Topic of interest: {topic}"),
-        ]
-    )
-    
-    gen_perspectives_chain = gen_perspectives_prompt | fast_llm.with_structured_output(
-        Perspectives
-    )
-    
-    # Initialize WikipediaRetriever
-    wikipedia_retriever = WikipediaRetriever(load_all_available_meta=True, top_k_results=1)
-    
-    # Function for formatting retrieved documents
-    def format_doc(doc, max_length=1000):
-        related = "- ".join(doc.metadata["categories"])
-        return f"### {doc.metadata['title']}\n\nSummary: {doc.page_content}\n\nRelated\n{related}"[
-            :max_length
-        ]
-    
-    # Function for formatting a list of documents
-    def format_docs(docs):
-        return "\n\n".join(format_doc(doc) for doc in docs)
-    
-    # Define coroutine for surveying related subjects and selecting editors
-    @as_runnable
-    async def survey_subjects(topic: str):
-        related_subjects = await expand_chain.ainvoke({"topic": topic})
-        retrieved_docs = await wikipedia_retriever.abatch(
-            related_subjects.topics, return_exceptions=True
+        open_ai_api_key = state["open_ai_key"]
+        fast_llm = ChatOpenAI(model="gpt-3.5-turbo", openai_api_key = open_ai_api_key, temperature=0)
+           
+        # Define chat prompts and chains for generating an outline, expanding related topics, and selecting editors
+        
+        # Chat prompts for generating an outline
+        direct_gen_outline_prompt = ChatPromptTemplate.from_messages(
+            [
+                (
+                    "system",
+                    "You are a Wikipedia writer. Write an outline for a Wikipedia page about a user-provided topic. The Wikipedia page will be read by consultants and senior executives working for energy and utility sectors for insights. Be comprehensive and specific.",
+                ),
+                ("user", f"{topic}"),
+            ]
         )
-        all_docs = []
-        for docs in retrieved_docs:
-            if isinstance(docs, BaseException):
-                continue
-            all_docs.extend(docs)
-        formatted = format_docs(all_docs)
-        return await gen_perspectives_chain.ainvoke({"examples": formatted, "topic": topic})
+        
+        generate_outline_direct = direct_gen_outline_prompt | fast_llm.with_structured_output(
+            Outline
+        )
     
-    # Invoke chat chains for generating outline and selecting editors concurrently
-    coros = (
-        generate_outline_direct.ainvoke({"topic": topic}),
-        survey_subjects.ainvoke(topic),
-    )
-    results = await asyncio.gather(*coros)
-    
-    # Return updated research state with generated outline and selected editors
-    return {
-        **state,
-        "outline": results[0],
-        "editors": results[1].editors,
-    }
+        # Chat prompts for expanding related topics
+        gen_related_topics_prompt = ChatPromptTemplate.from_template(
+            """I'm writing a Wikipedia page for a topic mentioned below. Please identify and recommend some Wikipedia pages on closely related subjects. \n
+            I'm looking for examples that provide insights to consultants and executives into interesting aspects specifically associated with this topic, or examples that help me understand the typical content and structure included in Wikipedia pages.
+            Also remember that this Wikipedia page will be read by consultants and senior executives as insights working for energy and utility sector. 
+            Please list as many subjects and urls as you can.
+            
+            Topic of interest: {topic}
+            """
+        )
+        
+        expand_chain = gen_related_topics_prompt | fast_llm.with_structured_output(
+            RelatedSubjects
+        )
+        
+        # Chat prompts for selecting editors
+        gen_perspectives_prompt = ChatPromptTemplate.from_messages(
+            [
+                (
+                    "system",
+                    """You need to select a diverse (and distinct) group of Wikipedia editors who will work together to create a comprehensive article on the topic. Each of them represents a different perspective, role, or affiliation related to this topic.\
+                    You can use other Wikipedia pages of related topics for inspiration. For each editor, add a description of what they will focus on.
+                    Wiki page outlines of related topics for inspiration:
+                    {examples}""",
+                ),
+                ("user", "Topic of interest: {topic}"),
+            ]
+        )
+        
+        gen_perspectives_chain = gen_perspectives_prompt | fast_llm.with_structured_output(
+            Perspectives
+        )
+        
+        # Initialize WikipediaRetriever
+        wikipedia_retriever = WikipediaRetriever(load_all_available_meta=True, top_k_results=1)
+        
+        # Function for formatting retrieved documents
+        def format_doc(doc, max_length=1000):
+            related = "- ".join(doc.metadata["categories"])
+            return f"### {doc.metadata['title']}\n\nSummary: {doc.page_content}\n\nRelated\n{related}"[
+                :max_length
+            ]
+        
+        # Function for formatting a list of documents
+        def format_docs(docs):
+            return "\n\n".join(format_doc(doc) for doc in docs)
+        
+        # Define coroutine for surveying related subjects and selecting editors
+        @as_runnable
+        async def survey_subjects(topic: str):
+            related_subjects = await expand_chain.ainvoke({"topic": topic})
+            retrieved_docs = await wikipedia_retriever.abatch(
+                related_subjects.topics, return_exceptions=True
+            )
+            all_docs = []
+            for docs in retrieved_docs:
+                if isinstance(docs, BaseException):
+                    continue
+                all_docs.extend(docs)
+            formatted = format_docs(all_docs)
+            return await gen_perspectives_chain.ainvoke({"examples": formatted, "topic": topic})
+        
+        # Invoke chat chains for generating outline and selecting editors concurrently
+        coros = (
+            generate_outline_direct.ainvoke({"topic": topic}),
+            survey_subjects.ainvoke(topic),
+        )
+        results = await asyncio.gather(*coros)
+        
+        # Return updated research state with generated outline and selected editors
+        return {
+            **state,
+            "outline": results[0],
+            "editors": results[1].editors,
+        }
+    except Exception as e:
+        # If there is any issues with accessing Pinecone catch that exveption and continue
+        print(f"Initialize Research: {e}")
+        return "initialing research. "
 # End of initialize_research
 
 # Start of conduct_interviews
@@ -355,6 +361,7 @@ async def conduct_interviews(state: ResearchState):
         dict: The updated research state including the interview results.
     """
     topic = state["topic"]
+    print("**** Conducting Interview ****")
     
     open_ai_api_key = state["open_ai_key"]
     fast_llm = ChatOpenAI(model="gpt-3.5-turbo", openai_api_key = open_ai_api_key, temperature=0)
@@ -435,7 +442,7 @@ async def conduct_interviews(state: ResearchState):
         answer: str = Field(
             description="Comprehensive answer to the user's question with citations.",
         )
-        cited_urls: Optional[List[str]]  = Field(
+        cited_urls: List[str]  = Field(
             description="List of urls cited in the answer.",
         )
     
@@ -473,7 +480,7 @@ async def conduct_interviews(state: ResearchState):
         environment= pinecone_envo
         )
         # print('************')
-        # print('Inside search_knowledge_catalogue ', pinecone_index)
+        # print('Inside search_knowledge_catalogue')
         # print('************')
 
         index = pinecone.Index(pinecone_index)
@@ -500,58 +507,94 @@ async def conduct_interviews(state: ResearchState):
         name: str = "Subject_Matter_Expert",
         max_str_len: int = 15000
     ):
-        name = sanitize_name(name)
-        swapped_state = swap_roles(state, name)  # Convert all other AI messages
-        queries = await gen_queries_chain.ainvoke(swapped_state)
-        
-        
+        swapped_state = None
+        queries = None
         successful_results = []
+        cited_references = {}
+        formatted_message = None
+        
+        try: 
+            name = sanitize_name(name)
+            swapped_state = swap_roles(state, name)  # Convert all other AI messages
+            queries = await gen_queries_chain.ainvoke(swapped_state)
+            query_results = await search_engine.abatch(
+                queries["parsed"].queries, config, return_exceptions=True
+            )
+            
+            successful_results = [
+                res for res in query_results if not isinstance(res, Exception)
+            ]
+            
+            # print("*****successful_results****")
+            # print(successful_results)
+            # print("*********")
+            
+        except Exception as e:
+            print(f"performing search over internet: {e}")
+            return "performing search over internet. "
         
         try:
             
             ## Logic to fetch data from Agent Bruno vectorstore
             if pinecone_index != '':
-                #print("********** Pinecone index is provided.********")
+                print("********** Pinecone index is provided ********")
                 vector_results = await search_knowledge_catalogue.abatch(queries["parsed"].queries)
                 #print("Vector store results: ", vector_results)
-                successful_results += vector_results
-                
-            query_results = await search_engine.abatch(
-                queries["parsed"].queries, config, return_exceptions=True
-            )
+                successful_results.extend(vector_results)
+                #successful_results += vector_results
+                 
         except Exception as e:
-            # Handle the exception here
-            print(f"An error occurred while fetching data from Agent Bruno vectorstore: {e}")
+            # If there is any issues with accessing Pinecone catch that exveption and continue
+            print(f"An error occurred while fetching data from Pinecone vectorstore: {e}")
+
+        
+        if len(successful_results) > 0:
             
-        
-        #successful_results.extend(res for res in query_results if not isinstance(res, Exception))
-
-        successful_results += [
-            res for res in query_results if not isinstance(res, Exception)
-        ]
-        
-        
-        all_query_results = {
-            res["url"]: res["content"] for results in successful_results for res in results
-        }
-
-        # We could be more precise about handling max token length if we wanted to here
-        dumped = json.dumps(all_query_results)[:max_str_len]
-        ai_message: AIMessage = queries["raw"]
-        tool_call = queries["raw"].additional_kwargs["tool_calls"][0]
-        tool_id = tool_call["id"]
-        tool_message = ToolMessage(tool_call_id=tool_id, content=dumped)
-        swapped_state["messages"].extend([ai_message, tool_message])
-        # Only update the shared state with the final answer to avoid
-        # polluting the dialogue history with intermediate messages
-        generated = await gen_answer_chain.ainvoke(swapped_state)
-
-        cited_urls = set(generated["parsed"].cited_urls)
-        # Save the retrieved information to a the shared state for future reference
-        cited_references = {k: v for k, v in all_query_results.items() if k in cited_urls}
-        formatted_message = AIMessage(name=name, content=generated["parsed"].as_str)
+            try: 
+                all_query_results = {
+                    res["url"]: res["content"] for results in successful_results for res in results
+                }
                 
-        return {"messages": [formatted_message], "references": cited_references}
+                print("---I'm consilidating all seach results.---")
+                #print(all_query_results)
+                #print("------")
+        
+                # We could be more precise about handling max token length if we wanted to here
+                dumped = json.dumps(all_query_results)[:max_str_len]
+                ai_message: AIMessage = queries["raw"]
+                tool_call = queries["raw"].additional_kwargs["tool_calls"][0]
+                tool_id = tool_call["id"]
+                tool_message = ToolMessage(tool_call_id=tool_id, content=dumped)
+                swapped_state["messages"].extend([ai_message, tool_message])
+                # Only update the shared state with the final answer to avoid
+                # polluting the dialogue history with intermediate messages
+                generated = await gen_answer_chain.ainvoke(swapped_state)
+        
+                cited_urls = set(generated["parsed"].cited_urls)
+                print("---I'm consolidating Citation List---")
+                #print(cited_urls)
+                #print("------")
+                
+                # Save the retrieved information to a the shared state for future reference
+                cited_references = {k: v for k, v in all_query_results.items() if k in cited_urls}
+                print("---I'm consolidating cited references---")
+                print(cited_references)
+                print("------")
+                
+                formatted_message = AIMessage(name=name, content=generated["parsed"].as_str)
+                print("---I'm formating generated message---")
+                # print(formatted_message)
+                # print("------")
+                        
+                return {"messages": [formatted_message], "references": cited_references}
+            
+            except Exception as e:
+                # If there is any issues with accessing Pinecone catch that exveption and continue
+                print(f" - Generating answers with citation: {e}")
+                return "generating answers with citation. "
+                
+        else:
+            return {"messages": "The research task on the your topic '{topic}' is incomplete.", "references": "No citations found."}
     
     # End logic for generating answers
     
@@ -574,39 +617,43 @@ async def conduct_interviews(state: ResearchState):
     
     # End logic for routing messages
     
+    try: 
+        builder = StateGraph(InterviewState)
+        
+        builder.add_node("ask_question", generate_question)
+        builder.add_node("answer_question", gen_answer)
+        builder.add_conditional_edges("answer_question", route_messages)
+        builder.add_edge("ask_question", "answer_question")
+        
+        builder.set_entry_point("ask_question")
+        interview_graph = builder.compile().with_config(run_name="Conduct Interviews")
+        
+        initial_states = [
+            {
+                "editor": editor,
+                "messages": [
+                    AIMessage(
+                        content=f"So you said you were writing an article on {topic}?",
+                        name=sanitize_name("Subject_Matter_Expert"),
+                    )
+                ],
+            }
+            for editor in state["editors"]
+        ]
+        
+        config = {"recursion_limit": 100}
+        
+        interview_results = await interview_graph.abatch(initial_states, config=config)
     
-    builder = StateGraph(InterviewState)
     
-    builder.add_node("ask_question", generate_question)
-    builder.add_node("answer_question", gen_answer)
-    builder.add_conditional_edges("answer_question", route_messages)
-    builder.add_edge("ask_question", "answer_question")
-    
-    builder.set_entry_point("ask_question")
-    interview_graph = builder.compile().with_config(run_name="Conduct Interviews")
-    
-    initial_states = [
-        {
-            "editor": editor,
-            "messages": [
-                AIMessage(
-                    content=f"So you said you were writing an article on {topic}?",
-                    name=sanitize_name("Subject_Matter_Expert"),
-                )
-            ],
+        return {
+            **state,
+            "interview_results": interview_results,
         }
-        for editor in state["editors"]
-    ]
-    
-    config = {"recursion_limit": 100}
-    
-    interview_results = await interview_graph.abatch(initial_states, config=config)
-
-
-    return {
-        **state,
-        "interview_results": interview_results,
-    }
+    except Exception as e:
+        # If there is any issues with accessing Pinecone catch that exveption and continue
+        print(f"Conducting interviews: {e}")
+        return "conducting interviews. "
 
 # End of conduct_interviews
 async def refine_outline(state: ResearchState):
@@ -619,58 +666,63 @@ async def refine_outline(state: ResearchState):
     Returns:
         dict: The updated research state including the refined outline.
     """
+    print("**** Refine Outline ****")
+    try:
+        # Function to format conversation messages for display
+        def format_conversation(interview_state):
+            messages = interview_state["messages"]
+            convo = "\n".join(f"{m.name}: {m.content}" for m in messages)
+            return f'Conversation with {interview_state["editor"].name}\n\n' + convo
     
-    # Function to format conversation messages for display
-    def format_conversation(interview_state):
-        messages = interview_state["messages"]
-        convo = "\n".join(f"{m.name}: {m.content}" for m in messages)
-        return f'Conversation with {interview_state["editor"].name}\n\n' + convo
-
-    # Extract conversation messages from interview results
-    convos = "\n\n".join(
-        [
-            format_conversation(interview_state)
-            for interview_state in state["interview_results"]
-        ]
-    )
-
-    # Define prompt for refining the outline
-    refine_outline_prompt = ChatPromptTemplate.from_messages(
-        [
-            (
-                "system",
-                """You are a Wikipedia writer. You have gathered information from experts and search engines. Now, you are refining the outline of the Wikipedia page. \
-                You need to make sure that the outline is comprehensive and specific. \
-                Topic you are writing about: {topic} 
-                
-                Old outline:
-                
-                {old_outline}""",
-            ),
-            (
-                "user",
-                "Refine the outline based on your conversations with subject-matter experts:\n\nConversations:\n\n{conversations}\n\nWrite the refined Wikipedia outline:",
-            ),
-        ]
-    )
-
-    open_ai_api_key = state["open_ai_key"]
-    long_context_llm = ChatOpenAI(model="gpt-3.5-turbo", openai_api_key = open_ai_api_key, temperature=0)
+        # Extract conversation messages from interview results
+        convos = "\n\n".join(
+            [
+                format_conversation(interview_state)
+                for interview_state in state["interview_results"]
+            ]
+        )
     
-    # Use Turbo model for generating the refined outline
-    refine_outline_chain = refine_outline_prompt | long_context_llm.with_structured_output(
-        Outline
-    )
+        # Define prompt for refining the outline
+        refine_outline_prompt = ChatPromptTemplate.from_messages(
+            [
+                (
+                    "system",
+                    """You are a Wikipedia writer. You have gathered information from experts and search engines. Now, you are refining the outline of the Wikipedia page. \
+                    You need to make sure that the outline is comprehensive and specific. \
+                    Topic you are writing about: {topic} 
+                    
+                    Old outline:
+                    
+                    {old_outline}""",
+                ),
+                (
+                    "user",
+                    "Refine the outline based on your conversations with subject-matter experts:\n\nConversations:\n\n{conversations}\n\nWrite the refined Wikipedia outline:",
+                ),
+            ]
+        )
     
-    # Invoke the refinement chain to generate the updated outline
-    updated_outline = await refine_outline_chain.ainvoke(
-        {
-            "topic": state["topic"],
-            "old_outline": state["outline"].as_str,
-            "conversations": convos,
-        }
-    )
-    return {**state, "outline": updated_outline}
+        open_ai_api_key = state["open_ai_key"]
+        long_context_llm = ChatOpenAI(model="gpt-3.5-turbo", openai_api_key = open_ai_api_key, temperature=0)
+        
+        # Use Turbo model for generating the refined outline
+        refine_outline_chain = refine_outline_prompt | long_context_llm.with_structured_output(
+            Outline
+        )
+        
+        # Invoke the refinement chain to generate the updated outline
+        updated_outline = await refine_outline_chain.ainvoke(
+            {
+                "topic": state["topic"],
+                "old_outline": state["outline"].as_str,
+                "conversations": convos,
+            }
+        )
+        return {**state, "outline": updated_outline}
+    except Exception as e:
+        # If there is any issues with accessing Pinecone catch that exveption and continue
+        print(f"Refining Outline: {e}")
+        return "refining outline. "
 # End of refine_outline
 
 # Start of index_references
@@ -686,46 +738,53 @@ async def index_references(state: ResearchState):
     Returns:
         ResearchState: The unchanged research state.
     """
-    all_docs = []
+    print("**** Index References ****")
     
-    open_ai_api_key = state["open_ai_key"]
-    
-    embeddings = OpenAIEmbeddings(openai_api_key = open_ai_api_key)
-    
-    vectorstore = SKLearnVectorStore(embeddings)
-    
-    
-    # Iterate through each interview result to extract reference documents
-    for interview_state in state["interview_results"]:
-        # Extract reference documents from the interview state and create Document objects
-        reference_docs = [
-            Document(page_content=v, metadata={"source": k})
-            for k, v in interview_state["references"].items()
-        ]
-        # Add reference documents to the list of all documents
-        all_docs.extend(reference_docs)
-    
-    # Check if there are any reference documents
-    if len(all_docs) > 0:
-        # If reference documents exist, add them to the vector store
+    try:
         
-        #print("*****index_references****** : ", len(all_docs))
+        all_docs = []
         
-        await vectorstore.aadd_documents(all_docs)
-
-
+        open_ai_api_key = state["open_ai_key"]
         
-    else:
-        # If there are no reference documents, handle it as an error
-        #print('If there are no reference documents, handle as error --> Logic to be written')
-        return 'Problem referencing index. There are no reference documents to wirte this article. Try again.'
+        embeddings = OpenAIEmbeddings(openai_api_key = open_ai_api_key)
         
-    #return state
-    return {
-        **state,
-        "vectorstore": vectorstore,
-    }
-
+        vectorstore = SKLearnVectorStore(embeddings)
+        
+        
+        # Iterate through each interview result to extract reference documents
+        for interview_state in state["interview_results"]:
+            # Extract reference documents from the interview state and create Document objects
+            reference_docs = [
+                Document(page_content=v, metadata={"source": k})
+                for k, v in interview_state["references"].items()
+            ]
+            # Add reference documents to the list of all documents
+            all_docs.extend(reference_docs)
+        
+        # Check if there are any reference documents
+        if len(all_docs) > 0:
+            # If reference documents exist, add them to the vector store
+            
+            print("*****index_references****** : ", len(all_docs))
+            
+            await vectorstore.aadd_documents(all_docs)
+    
+    
+            
+        else:
+            # If there are no reference documents, handle it as an error
+            #print('If there are no reference documents, handle as error --> Logic to be written')
+            return 'Problem referencing index. There are no reference documents to wirte this article. Try again.'
+            
+        #return state
+        return {
+            **state,
+            "vectorstore": vectorstore,
+        }
+    except Exception as e:
+        # If there is any issues with accessing Pinecone catch that exveption and continue
+        print(f"Index References: {e}")
+        return "index referencing. "
 # End of index_references
 
 async def write_sections(state: ResearchState):
@@ -738,68 +797,76 @@ async def write_sections(state: ResearchState):
     Returns:
         dict: The updated research state including the written sections.
     """
-    # Extract the outline from the state
-    outline = state["outline"]
-
-    open_ai_api_key = state["open_ai_key"]
-    long_context_llm = ChatOpenAI(model="gpt-3.5-turbo", openai_api_key = open_ai_api_key, temperature=0)
-    vectorstore = state["vectorstore"]
     
-    # Define the prompt template for writing WikiSections
-    section_writer_prompt = ChatPromptTemplate.from_messages(
-        [
-            (
-                "system",
-                "You are an expert Wikipedia writer. Complete your assigned WikiSection from the following outline:\n\n"
-                "Just remember that you are writing this page for consultants and executive working for energy and utility sectors."
-                "{outline}\n\nCite your sources, using the following references:\n\n<Documents>\n{docs}\n<Documents>",
-            ),
-            ("user", "Write the full WikiSection for the {section} section."),
-        ]
-    )
-    # Initialize the retriever for retrieving documents from the vector store
-    retriever = vectorstore.as_retriever(k=10)
+    print("**** Writing Sections ****")
+    
+    try: 
+        # Extract the outline from the state
+        outline = state["outline"]
+    
+        open_ai_api_key = state["open_ai_key"]
+        long_context_llm = ChatOpenAI(model="gpt-3.5-turbo", openai_api_key = open_ai_api_key, temperature=0)
+        vectorstore = state["vectorstore"]
         
-    # Define the retrieve function to retrieve documents related to the section topic
-    async def retrieve(inputs: dict):
-        # Retrieve documents related to the section topic
-        docs = await retriever.ainvoke(inputs["topic"] + ": " + inputs["section"])
-        # Format the retrieved documents
-        formatted = "\n".join(
+        # Define the prompt template for writing WikiSections
+        section_writer_prompt = ChatPromptTemplate.from_messages(
             [
-                f'<Document href="{doc.metadata["source"]}"/>\n{doc.page_content}\n</Document>'
-                for doc in docs
+                (
+                    "system",
+                    "You are an expert Wikipedia writer. Complete your assigned WikiSection from the following outline:\n\n"
+                    "Just remember that you are writing this page for consultants and executive working for energy and utility sectors."
+                    "{outline}\n\nCite your sources, using the following references:\n\n<Documents>\n{docs}\n<Documents>",
+                ),
+                ("user", "Write the full WikiSection for the {section} section."),
             ]
         )
-        # print("****write_section*****")
-        # print(formatted)
-        # print("*********")
-        return {"docs": formatted, **inputs}
-
-    # Define the section writer pipeline
-    section_writer = (
-        retrieve
-        | section_writer_prompt
-        | long_context_llm.with_structured_output(WikiSection)
-    )
+        # Initialize the retriever for retrieving documents from the vector store
+        retriever = vectorstore.as_retriever(k=10)
+            
+        # Define the retrieve function to retrieve documents related to the section topic
+        async def retrieve(inputs: dict):
+            # Retrieve documents related to the section topic
+            docs = await retriever.ainvoke(inputs["topic"] + ": " + inputs["section"])
+            # Format the retrieved documents
+            formatted = "\n".join(
+                [
+                    f'<Document href="{doc.metadata["source"]}"/>\n{doc.page_content}\n</Document>'
+                    for doc in docs
+                ]
+            )
+            print("****write_section*****")
+            #print(formatted)
+            print("*********")
+            return {"docs": formatted, **inputs}
     
-    # Write WikiSections for each section in the outline
-    sections = await section_writer.abatch(
-        [
-            {
-                "outline": state["outline"],
-                "section": section.section_title,
-                "topic": state["topic"],
-            }
-            for section in outline.sections
-        ]
-    )
-
-    # Return the updated state with the written sections
-    return {
-        **state,
-        "sections": sections,
-    }
+        # Define the section writer pipeline
+        section_writer = (
+            retrieve
+            | section_writer_prompt
+            | long_context_llm.with_structured_output(WikiSection)
+        )
+        
+        # Write WikiSections for each section in the outline
+        sections = await section_writer.abatch(
+            [
+                {
+                    "outline": state["outline"],
+                    "section": section.section_title,
+                    "topic": state["topic"],
+                }
+                for section in outline.sections
+            ]
+        )
+    
+        # Return the updated state with the written sections
+        return {
+            **state,
+            "sections": sections,
+        }
+    except Exception as e:
+        # If there is any issues with accessing Pinecone catch that exveption and continue
+        print(f"Writing Sections: {e}")
+        return "writing sections. "
 
 async def write_article(state: ResearchState):
     """
@@ -812,42 +879,48 @@ async def write_article(state: ResearchState):
         dict: The updated research state including the generated article.
     """
     # Extract the topic and sections from the state
-
-    topic = state["topic"]
-    sections = state["sections"]
-
-    # Concatenate the section drafts to form the article draft
-    draft = "\n\n".join([section.as_str for section in sections])
+    print("**** Writing Article ****")
     
-    # Define the prompt for the article writer
-    writer_prompt = ChatPromptTemplate.from_messages(
-        [
-            (
-                "system",
-                "You are an expert Wikipedia author. Write the complete wiki article on {topic} using the following section drafts:\n\n"
-                "{draft}\n\nStrictly follow Wikipedia format guidelines.",
-            ),
-            (
-                "user",
-                "Write the complete Wiki article using markdown format. Organize citations using footnotes like '[1]',"
-                " avoiding duplicates in the footer. Include URLs in the footer.",
-            ),
-        ]
-    )
+    try: 
+        topic = state["topic"]
+        sections = state["sections"]
     
-    open_ai_api_key = state["open_ai_key"]
-    long_context_llm = ChatOpenAI(model="gpt-3.5-turbo", openai_api_key = open_ai_api_key, temperature=0)
+        # Concatenate the section drafts to form the article draft
+        draft = "\n\n".join([section.as_str for section in sections])
+        
+        # Define the prompt for the article writer
+        writer_prompt = ChatPromptTemplate.from_messages(
+            [
+                (
+                    "system",
+                    "You are an expert Wikipedia author. Write the complete wiki article on {topic} using the following section drafts:\n\n"
+                    "{draft}\n\nStrictly follow Wikipedia format guidelines.",
+                ),
+                (
+                    "user",
+                    "Write the complete Wiki article using markdown format. Organize citations using footnotes like '[1]',"
+                    " avoiding duplicates in the footer. Include URLs in the footer.",
+                ),
+            ]
+        )
+        
+        open_ai_api_key = state["open_ai_key"]
+        long_context_llm = ChatOpenAI(model="gpt-3.5-turbo", openai_api_key = open_ai_api_key, temperature=0)
+        
+        # Define the writer pipeline
+        writer = writer_prompt | long_context_llm | StrOutputParser()
+        
+        # Invoke the writer to generate the article
+        article = await writer.ainvoke({"topic": topic, "draft": draft})
     
-    # Define the writer pipeline
-    writer = writer_prompt | long_context_llm | StrOutputParser()
-    
-    # Invoke the writer to generate the article
-    article = await writer.ainvoke({"topic": topic, "draft": draft})
-
-    # Return the updated state with the generated article
-    return {
-        **state,
-        "article": article,
-    }
+        # Return the updated state with the generated article
+        return {
+            **state,
+            "article": article,
+        }
+    except Exception as e:
+        # If there is any issues with accessing Pinecone catch that exveption and continue
+        print(f"Writing Article: {e}")
+        return "writing article. "
 
 # End of write_sections

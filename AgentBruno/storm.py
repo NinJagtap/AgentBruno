@@ -57,8 +57,8 @@ class Storm:
                 }, config=config
             ):
                 name = next(iter(step))
-                print(name)
-                print("-- ", str(step[name])[:300])
+                #print(name)
+                #print("-- ", str(step[name])[:300])
                 if END in step:
                     results = step
             
@@ -68,5 +68,5 @@ class Storm:
         
         except Exception as e:
             # Handle the exception here
-            #print(f"An error occurred: {e}")
-            return f"An error occurred: {e}" 
+            print(f"An error occurred: {e}")
+            return f"Something went wrong while" 
